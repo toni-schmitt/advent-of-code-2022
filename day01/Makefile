@@ -2,7 +2,7 @@ CXX = c++
 CXXFLAGS = -Wall -Werror -Wextra -std=c++11 -g
 
 PART_1 = part_1
-#PART_2 = part_2
+PART_2 = part_2
 
 SRC_DIR = ./src
 SRC_PART_1 = $(SRC_DIR)/part_1.cpp
