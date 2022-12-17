@@ -3,33 +3,50 @@
 #include <utility>
 #include <vector>
 
-struct Dir;
+struct Directory;
 
 struct File
 {
 	std::string name;
 	size_t size;
-	const Dir &parent_directory;
+	[[maybe_unused]] const Directory &parent_directory;
 };
 
-struct Dir
+struct Directory
 {
 private:
-	const std::string _name;
+	std::string _name;
 	size_t _size;
-	const Dir &_parent;
-	std::vector<Dir> _sub_directories;
+	std::vector<Directory> _sub_directories;
 	std::vector<File> _files;
 
 public:
-	explicit Dir(std::string directory_name, const Dir &parent_directory) : _name(std::move(directory_name)),
-																			_parent(parent_directory)
+
+	Directory()
 	{
-		( void ) _parent;
-		_size = calculate_size();
+		_name = "undefined";
+		_size = 0;
+		_sub_directories = std::vector<Directory>();
+		_files = std::vector<File>();
 	}
 
-	auto add_sub_directory(const Dir &sub_directory)
+	Directory(
+			std::string directory_name,
+			const std::vector<Directory> &sub_directories = std::vector<Directory>(),
+			const std::vector<File> &files = std::vector<File>()
+	) : _name(std::move(directory_name)), _sub_directories(sub_directories), _files(files)
+	{
+		if (!sub_directories.empty() && !files.empty())
+		{
+			_size = calculate_size();
+		}
+	}
+
+	[[nodiscard]] const auto &sub_directories() const { return _sub_directories; }
+
+	[[nodiscard]] const auto &name() const { return _name; }
+
+	auto add_sub_directory(const Directory &sub_directory)
 	{
 		_sub_directories.push_back(sub_directory);
 		_size = calculate_size();
@@ -42,7 +59,7 @@ public:
 	}
 
 private:
-	static size_t _calculate_size_of_files(const Dir &directory)
+	static size_t _calculate_size_of_files(const Directory &directory)
 	{
 		size_t size = 0;
 		for (const auto &file: directory._files)
@@ -50,38 +67,38 @@ private:
 		return size;
 	}
 
-	size_t _caluclate_size(const Dir &directory) const
+	[[nodiscard]] size_t _calculate_size(const Directory &directory) const
 	{
 		size_t size = 0;
 		if (directory._sub_directories.empty())
 			return _calculate_size_of_files(directory);
 		for (const auto &sub_directory: directory._sub_directories)
 		{
-			size += _caluclate_size(sub_directory);
+			size += _calculate_size(sub_directory);
 		}
 		return size;
 	}
 
 public:
-	size_t calculate_size() const
+	[[nodiscard]] size_t calculate_size() const
 	{
-		size_t size = 0;
-		for (const auto &directory: _sub_directories)
-		{
-			size += _caluclate_size(directory);
-		}
+		size_t size = _calculate_size_of_files(*this);
+//		for (const auto &directory: _sub_directories)
+//		{
+//			size += _calculate_size(directory);
+//		}
 		return size;
 	}
 
-	auto size() const { return _size; }
+	[[nodiscard]] auto size() const { return _size; }
 
 };
 
 struct Filesystem
 {
 private:
-	std::vector<Dir> _directories;
-	std::stack<Dir *> _last_cds;
+	Directory _root;
+	std::stack<Directory *> _last_cds;
 
 	static inline auto remove_whitespace(std::string &string)
 	{
@@ -93,15 +110,84 @@ public:
 	{
 		for (const auto &line: input)
 		{
-			if (is_command(line))
+			if (_is_command(line))
 				read_command(line);
 			else
 				read_directory_structure(line);
 		}
 	}
 
-	static inline bool is_command(const std::string &line) { return line.find('$') != std::string::npos; }
+private:
+	static inline bool _is_command(const std::string &line) { return line.find('$') != std::string::npos; }
 
+	static inline bool _is_root_directory(const std::string &command)
+	{
+		return command.find("cd /") != std::string::npos;
+	}
+
+	inline void _add_root_directory()
+	{
+		_root = Directory("/");
+		_last_cds.push(&_root);
+	}
+
+	static inline bool _is_directory_up(const std::string &command) { return command.find("..") != std::string::npos; }
+
+	inline void _move_directory_up() { _last_cds.pop(); }
+
+	inline static const auto &_find_directory(const std::string &name, const Directory &directory)
+	{
+		if (directory.name() == name)
+			return directory;
+
+		for (const auto &dir: directory.sub_directories())
+		{
+			if (dir.name() == name)
+				return dir;
+		}
+		throw std::logic_error(name + " not found in sub_directories");
+	}
+
+	inline static auto _get_entry_name(const std::string &entry)
+	{
+		std::string entry_name = entry.substr(entry.rfind(' '));
+		remove_whitespace(entry_name);
+		return entry_name;
+	}
+
+	inline void _change_directory(const std::string &command)
+	{
+		if (_is_root_directory(command))
+		{
+			_add_root_directory();
+			return;
+		}
+		if (_is_directory_up(command))
+		{
+			_move_directory_up();
+			return;
+		}
+
+		auto directory_name = _get_entry_name(command);
+
+		auto &directory = const_cast<Directory &>(_find_directory(directory_name, *_last_cds.top()));
+
+		_last_cds.push(&directory);
+	}
+
+	inline auto _add_to_last_directory(const Directory &directory)
+	{
+		auto &last_directory = _last_cds.top();
+		last_directory->add_sub_directory(directory);
+	}
+
+	inline auto _add_to_last_directory(const File &file)
+	{
+		auto &last_directory = _last_cds.top();
+		last_directory->add_file(file);
+	}
+
+public:
 	void read_command(const std::string &command)
 	{
 		if (command.find('$') == std::string::npos)
@@ -110,48 +196,94 @@ public:
 
 		if (command.find("cd") != std::string::npos)
 		{
-			if (command.find("..") != std::string::npos)
-			{
-				_last_cds.pop();
-				return;
-			}
-			auto directory_name = command.substr(command.rfind(' '));
-			remove_whitespace(directory_name);
-			_last_cds.push(&_directories.emplace_back(directory_name, _directories.back()));
+			_change_directory(command);
 		}
 		else if (command.find("ls") != std::string::npos)
 		{
 		}
-		else throw std::invalid_argument("\'" + command + "\' is an invalid command");
+		else
+		{
+			throw std::invalid_argument("\'" + command + "\' is an invalid command");
+		}
 	}
 
 	void read_directory_structure(const std::string &entry)
 	{
 		if (entry.find("dir") != std::string::npos)
 		{
-			auto name = entry.substr(entry.rfind(' '));
-			remove_whitespace(name);
-			Dir sub_directory(name, *_last_cds.top());
-			_last_cds.top()->add_sub_directory(sub_directory);
+			auto name = _get_entry_name(entry);
+
+			_add_to_last_directory({ name });
 		}
 		else
 		{
-			// must be file
-
 			auto index_at_space = entry.find(' ');
 			if (index_at_space == std::string::npos)
 				throw std::logic_error(entry + " must be file, but no space found");
 
 			auto size = std::stoul(entry.substr(0, index_at_space));
-			auto name = entry.substr(index_at_space);
-			remove_whitespace(name);
-			_last_cds.top()->add_file({ name, size, *_last_cds.top() });
+			auto name = _get_entry_name(entry);
+
+			_add_to_last_directory({ name, size, *_last_cds.top() });
 		}
 	}
 
-	void print_directory_structure() const
+	[[nodiscard]] static auto get_tmp(const Directory &directory)
 	{
+		std::vector<Directory> directories;
 
+		for (const auto &sub_directory: directory.sub_directories())
+		{
+			auto directory_size = sub_directory.calculate_size();
+			if (directory_size <= 100'000)
+			{
+				directories.push_back(directory);
+			}
+		}
+
+		return directories;
+	}
+
+	[[nodiscard]] auto part_1() const
+	{
+		std::vector<Directory> directories;
+
+		//_root
+		// dir
+		//	dir
+		//	dir
+		//		dir
+		//		dir
+		//	dir
+		//	dir
+		//		dir
+
+		for (const auto &directory: _root.sub_directories())
+		{
+			if (!directory.sub_directories().empty())
+			{
+				auto tmp = get_tmp(directory);
+				directories.insert(directories.end(), tmp.begin(), tmp.end());
+			}
+			auto directory_size = directory.calculate_size();
+			if (directory_size <= 100'000)
+			{
+				directories.push_back(directory);
+			}
+		}
+
+		return directories;
+	}
+
+	[[nodiscard]] auto sum_of_directories_part_1() const
+	{
+		auto directories_part_1 = part_1();
+
+		size_t size = 0;
+		for (const auto &directory: directories_part_1)
+			size += directory.size();
+
+		return size;
 	}
 };
 
@@ -169,54 +301,6 @@ auto get_input(const std::string &file_path)
 
 	return input;
 }
-//
-//auto get_filesystem(const std::vector<std::string> &input)
-//{
-//	Dir root_directory("/", root_directory);
-//
-//	for (const auto &line: input)
-//	{
-//		if (line.find('$') != std::string::npos)
-//		{
-//			// Command
-//			if (line.find("cd") != std::string::npos)
-//			{
-//				auto directory_name = line.substr(line.find(' '));
-//			}
-//			else if (line.find("ls") != std::string::npos)
-//			{
-//			}
-//			else
-//			{
-//				throw std::logic_error(line + " is an invalid command");
-//			}
-//		}
-//		else
-//		{
-//			if (line.find("dir") != std::string::npos)
-//			{
-//				// directory
-//			}
-//			else
-//			{
-//				auto index_at_space = line.find(' ');
-//				if (index_at_space == std::string::npos)
-//					throw std::logic_error(line + " must be file, but no space found");
-//
-//				auto size = line.substr(0, index_at_space);
-//				auto name = line.substr(index_at_space);
-//				Dir tmp;
-//				File file = {
-//						name,
-//						std::stoul(size),
-//						tmp // TODO: pls change me!!!!!
-//				};
-//			}
-//		}
-//	}
-//
-//	return filesystem;
-//}
 
 int main(int argc, char *argv[])
 {
@@ -230,6 +314,8 @@ int main(int argc, char *argv[])
 	auto input = get_input(argv[ 1 ]);
 
 	Filesystem filesystem(input);
+
+	std::cout << filesystem.sum_of_directories_part_1() << std::endl;
 
 	return 0;
 }
